@@ -281,13 +281,15 @@ void objectstore_perf_stat_t::dump(Formatter *f) const
 {
   f->dump_unsigned("commit_latency_ms", os_commit_latency);
   f->dump_unsigned("apply_latency_ms", os_apply_latency);
+  f->dump_unsigned("deferred_queue_size", deferred_queue_size);
 }
 
 void objectstore_perf_stat_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(1, 1, bl);
+  ENCODE_START(2, 1, bl);
   ::encode(os_commit_latency, bl);
   ::encode(os_apply_latency, bl);
+  ::encode(deferred_queue_size, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -296,6 +298,9 @@ void objectstore_perf_stat_t::decode(bufferlist::iterator &bl)
   DECODE_START(1, bl);
   ::decode(os_commit_latency, bl);
   ::decode(os_apply_latency, bl);
+  if (struct_v >= 2 ) {
+    ::decode(deferred_queue_size, bl);
+  }
   DECODE_FINISH(bl);
 }
 

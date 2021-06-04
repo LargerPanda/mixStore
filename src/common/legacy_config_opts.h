@@ -249,6 +249,7 @@ OPTION(mon_osd_backfillfull_ratio, OPT_FLOAT) // what % full makes an OSD backfi
 OPTION(mon_osd_nearfull_ratio, OPT_FLOAT) // what % full makes an OSD near full
 OPTION(mon_osd_initial_require_min_compat_client, OPT_STR)
 OPTION(mon_allow_pool_delete, OPT_BOOL) // allow pool deletion
+OPTION(mon_allow_pgchange, OPT_BOOL) // allow pg change
 OPTION(mon_fake_pool_delete, OPT_BOOL)  // fake pool deletion (add _DELETED suffix)
 OPTION(mon_globalid_prealloc, OPT_U32)   // how many globalids to prealloc
 OPTION(mon_osd_report_timeout, OPT_INT)    // grace period before declaring unresponsive OSDs dead
@@ -970,6 +971,8 @@ OPTION(bdev_aio, OPT_BOOL)
 OPTION(bdev_aio_poll_ms, OPT_INT)  // milliseconds
 OPTION(bdev_aio_max_queue_depth, OPT_INT)
 OPTION(bdev_aio_reap_max, OPT_INT)
+OPTION(bdev_aio_once_submit_max, OPT_INT)
+OPTION(bdev_aio_submit_sleep, OPT_FLOAT)
 OPTION(bdev_block_size, OPT_INT)
 OPTION(bdev_debug_aio, OPT_BOOL)
 OPTION(bdev_debug_aio_suicide_timeout, OPT_FLOAT)
@@ -1007,6 +1010,7 @@ OPTION(bluestore_bluefs_balance_interval, OPT_FLOAT) // how often (sec) to balan
 // how often (sec) to dump allocation failure happened during bluefs rebalance
 OPTION(bluestore_bluefs_balance_failure_dump_interval, OPT_FLOAT)
 
+OPTION(bluestore_wal_db_perf_optimize, OPT_BOOL)
 // If you want to use spdk driver, you need to specify NVMe serial number here
 // with "spdk:" prefix.
 // Users can use 'lspci -vvv -d 8086:0953 | grep "Device Serial Number"' to

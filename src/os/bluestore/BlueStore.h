@@ -76,6 +76,7 @@ enum {
   l_bluestore_throttle_lat,
   l_bluestore_submit_lat,
   l_bluestore_commit_lat,
+  l_bluestore_finalize_thread_lat,
   l_bluestore_read_lat,
   l_bluestore_read_onode_meta_lat,
   l_bluestore_read_wait_aio_lat,
@@ -121,6 +122,7 @@ enum {
   l_bluestore_read_eio,
   l_bluestore_reads_with_retries,
   l_bluestore_fragmentation,
+  l_bluestore_deferred_queue_sizes,
   l_bluestore_last
 };
 
@@ -1624,7 +1626,9 @@ public:
     }
 
     void aio_finish(BlueStore *store) override {
-      store->txc_aio_finish(this);
+      //if (ioc.num_running == 0) {
+        store->txc_aio_finish(this);
+      //}
     }
   };
 
@@ -1647,6 +1651,8 @@ public:
     /// bytes of pending io for each deferred seq (may be 0)
     map<uint64_t,int> seq_bytes;
 
+    uint64_t batch_costs = 0;
+    uint64_t batch_costs_remaining = 0;
     void _discard(CephContext *cct, uint64_t offset, uint64_t length);
     void _audit(CephContext *cct);
 
@@ -1843,6 +1849,7 @@ private:
   utime_t bluefs_last_balance;
   utime_t next_dump_on_bluefs_balance_failure;
 
+  bool enable_wal_db_perf_optimize = false;
   KeyValueDB *db = nullptr;
   BlockDevice *bdev = nullptr;
   std::string freelist_type;
@@ -2545,10 +2552,17 @@ public:
 
   objectstore_perf_stat_t get_cur_stats() override {
     perf_tracker.update_from_perfcounters(*logger);
-    return perf_tracker.get_cur_stats();
+    objectstore_perf_stat_t ret;
+    ret = perf_tracker.get_cur_stats();
+    ret.deferred_queue_size = deferred_queue_size;
+    return ret;
   }
   const PerfCounters* get_perf_counters() const override {
     return logger;
+  }
+
+  int get_deferred_queue_size() override {
+    return deferred_queue_size;
   }
 
   int queue_transactions(

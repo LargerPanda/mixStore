@@ -13,6 +13,7 @@
 #include "include/buffer.h"
 #include "include/types.h"
 
+
 struct aio_t {
   struct iocb iocb;  // must be first element; see shenanigans in aio_queue_t
   void *priv;
@@ -88,8 +89,9 @@ struct aio_queue_t {
   }
 
   int submit(aio_t &aio, int *retries);
-  int submit_batch(aio_iter begin, aio_iter end, uint16_t aios_size, 
-		   void *priv, int *retries);
+  // aios size maybe overflow, so change aios_size to uint64_t.(https://tracker.ceph.com/issues/48696)
+  int submit_batch(aio_iter begin, aio_iter end, uint64_t aios_size,
+		   void *priv, int *retries, bool block);
   int get_next_completed(int timeout_ms, aio_t **paio, int max);
 };
 

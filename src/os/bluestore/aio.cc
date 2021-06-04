@@ -4,6 +4,16 @@
 #include <algorithm>
 #include "aio.h"
 
+#include "common/debug.h"
+#include "common/errno.h"
+#include "include/assert.h"
+#include "common/ceph_context.h"
+
+#define dout_context g_ceph_context
+#define dout_subsys ceph_subsys_aio
+#undef dout_prefix
+#define dout_prefix *_dout << "aio "
+
 #if defined(HAVE_LIBAIO)
 
 
@@ -42,41 +52,65 @@ std::ostream& operator<<(std::ostream& os, const aio_t& aio)
 }
 
 int aio_queue_t::submit_batch(aio_iter begin, aio_iter end, 
-			      uint16_t aios_size, void *priv, 
-			      int *retries)
+			      uint64_t aios_size, void *priv,
+			      int *retries, bool block)
 {
+  dout(3) << __func__ << " start." << dendl;
   // 2^16 * 125us = ~8 seconds, so max sleep is ~16 seconds
   int attempts = 16;
   int delay = 125;
 
+  int done_all = 0;
+
   aio_iter cur = begin;
-  struct iocb *piocb[aios_size];
-  int left = 0;
-  while (cur != end) {
-    cur->priv = priv;
-    *(piocb+left) = &cur->iocb;
-    ++left;
-    ++cur;
+
+  int once_max_submit_aios = g_ceph_context->_conf->bdev_aio_once_submit_max;
+  int submit_times = 0;
+  if (aios_size % once_max_submit_aios == 0) {
+    submit_times = aios_size/once_max_submit_aios;
+  } else {
+    submit_times = aios_size/once_max_submit_aios + 1;
   }
-  int done = 0;
-  while (left > 0) {
-    int r = io_submit(ctx, std::min(left, max_iodepth), piocb + done);
-    if (r < 0) {
-      if (r == -EAGAIN && attempts-- > 0) {
-	usleep(delay);
-	delay *= 2;
-	(*retries)++;
-	continue;
-      }
-      return r;
+  dout(3) << __func__ << "submit times: " << submit_times << ", " << "aios size: "<< aios_size << dendl;
+  // piocb maybe stack overflow, so submit ios many times instead of one time.
+  for(int i=0; i < submit_times; i++) {
+    struct iocb *piocb[once_max_submit_aios];
+    int left = 0;
+    while ((cur != end) && (left < once_max_submit_aios )) {
+      cur->priv = priv;
+      *(piocb+left) = &cur->iocb;
+      ++left;
+      ++cur;
     }
-    assert(r > 0);
-    done += r;
-    left -= r;
-    attempts = 16;
-    delay = 125;
+    dout(5) << __func__ << "now time: " << i << dendl;
+    int done = 0;
+    while (left > 0) {
+      int r = io_submit(ctx, std::min(left, max_iodepth), piocb + done);
+      if (r < 0) {
+        if (r == -EAGAIN && attempts-- > 0) {
+	  usleep(delay);
+	  delay *= 2;
+	  (*retries)++;
+	  continue;
+        }
+        return r;
+      }
+      assert(r > 0);
+      done += r;
+      left -= r;
+      attempts = 16;
+      delay = 125;
+    }
+    done_all += done;
+    if (block) {
+      usleep(g_ceph_context->_conf->bdev_aio_submit_sleep*1000*1000);
+      dout(3) << __func__ << " sleep."  << dendl;
+    } else {
+      dout(3) << __func__ << " no sleep" << dendl;
+    }
   }
-  return done;
+  dout(3) << __func__ << " end." << dendl;
+  return done_all;
 }
 
 int aio_queue_t::get_next_completed(int timeout_ms, aio_t **paio, int max)

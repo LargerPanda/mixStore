@@ -102,11 +102,13 @@ public:
   /**
    * Fetch Object Store statistics.
    *
-   * Currently only latency of write and apply times are measured.
+   * Currently only latency of write ind apply times are measured.
    *
    * This appears to be called with nothing locked.
    */
   virtual objectstore_perf_stat_t get_cur_stats() = 0;
+
+  virtual int get_deferred_queue_size() {return 0;};
 
   /**
    * Fetch Object Store performance counters.

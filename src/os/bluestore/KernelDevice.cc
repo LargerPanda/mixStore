@@ -41,6 +41,7 @@ KernelDevice::KernelDevice(CephContext* cct, aio_callback_t cb, void *cbpriv)
     fs(NULL), aio(false), dio(false),
     debug_lock("KernelDevice::debug_lock"),
     aio_queue(cct->_conf->bdev_aio_max_queue_depth),
+    enable_wal_db_perf_optimize(cct->_conf->bluestore_wal_db_perf_optimize),
     aio_callback(cb),
     aio_callback_priv(cbpriv),
     aio_stop(false),
@@ -406,9 +407,17 @@ void KernelDevice::_aio_thread()
 	// call aio_wake we cannot touch ioc or aio[] as the caller
 	// may free it.
 	if (ioc->priv) {
-	  if (--ioc->num_running == 0) {
-	    aio_callback(aio_callback_priv, ioc->priv);
-	  }
+	    if (enable_wal_db_perf_optimize && ioc->defer_write) { // only defer write. (others include no defer write and _deferred_replay)
+	      --ioc->num_running;
+	      aio_callback(aio_callback_priv, ioc->priv);
+	      dout(10) << __func__ << " leave ios: " << ioc->num_running << dendl;
+	    } else {
+	      if (--ioc->num_running == 0) {
+	        aio_callback(aio_callback_priv, ioc->priv);
+	        dout(10) << __func__ << " leave ios: " << ioc->num_running << dendl;
+	      }
+	      dout(10) << __func__ << " leave ios: " << ioc->num_running << dendl;
+	    }
 	} else {
           ioc->try_aio_wake();
 	}
@@ -525,6 +534,8 @@ void KernelDevice::aio_submit(IOContext *ioc)
   int pending = ioc->num_pending.load();
   ioc->num_running += pending;
   ioc->num_pending -= pending;
+  int initial = ioc->num_running.load();
+  ioc->num_initial_running = initial;
   assert(ioc->num_pending.load() == 0);  // we should be only thread doing this
   assert(ioc->pending_aios.size() == 0);
   
@@ -537,10 +548,21 @@ void KernelDevice::aio_submit(IOContext *ioc)
     }
   }
 
+  // only defer write and the block device can be blocked(sleep)
+  string::size_type wal = path.find("block.wal");
+  string::size_type db = path.find("block.db");
+  bool block = false;
+  if (enable_wal_db_perf_optimize && wal == string::npos
+   && db == string::npos && ioc->defer_write) {
+    dout(20) << __func__ << "path is: " <<  path << dendl;
+    block = true;
+  } else {
+    dout(20) << __func__ << "path is: : "  <<  path << dendl;
+  }
   void *priv = static_cast<void*>(ioc);
   int r, retries = 0;
   r = aio_queue.submit_batch(ioc->running_aios.begin(), e, 
-			     ioc->num_running.load(), priv, &retries);
+			     ioc->num_running.load(), priv, &retries, block);
   
   if (retries)
     derr << __func__ << " retries " << retries << dendl;

@@ -87,7 +87,8 @@ static void log_subop_stats(
   utime_t now = ceph_clock_now();
   utime_t latency = now;
   latency -= op->get_req()->get_recv_stamp();
-
+  utime_t process_latency = now;
+  process_latency -= op->get_dequeued_time();
 
   logger->inc(l_osd_sop);
   logger->tinc(l_osd_sop_lat, latency);
@@ -98,7 +99,7 @@ static void log_subop_stats(
     logger->inc(l_osd_sop_inb, inb);
     if (subop == l_osd_sop_w) {
       logger->inc(l_osd_sop_w_inb, inb);
-      logger->tinc(l_osd_sop_w_lat, latency);
+      logger->tinc(l_osd_sop_w_lat, process_latency);
     } else if (subop == l_osd_sop_push) {
       logger->inc(l_osd_sop_push_inb, inb);
       logger->tinc(l_osd_sop_push_lat, latency);

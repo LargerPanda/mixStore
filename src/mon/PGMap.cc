@@ -2191,12 +2191,14 @@ void PGMap::print_osd_perf_stats(std::ostream *ss) const
   tab.define_column("osd", TextTable::LEFT, TextTable::RIGHT);
   tab.define_column("commit_latency(ms)", TextTable::LEFT, TextTable::RIGHT);
   tab.define_column("apply_latency(ms)", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("deferred_queue_size(ms)", TextTable::LEFT, TextTable::RIGHT);
   for (auto i = osd_stat.begin();
        i != osd_stat.end();
        ++i) {
     tab << i->first;
     tab << i->second.os_perf_stat.os_commit_latency;
     tab << i->second.os_perf_stat.os_apply_latency;
+    tab << i->second.os_perf_stat.deferred_queue_size;
     tab << TextTable::endrow;
   }
   (*ss) << tab;

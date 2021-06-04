@@ -35,6 +35,7 @@ class KernelDevice : public BlockDevice {
   std::string path;
   FS *fs;
   bool aio, dio;
+  bool enable_wal_db_perf_optimize = false;
 
   Mutex debug_lock;
   interval_set<uint64_t> debug_inflight;

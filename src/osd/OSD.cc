@@ -5768,6 +5768,7 @@ void OSD::tick_without_osd_lock()
     } else if (report) {
       last_mon_report = now;
 
+      store->get_deferred_queue_size();
       // do any pending reports
       send_full_update();
       send_failures();
@@ -6682,6 +6683,8 @@ void OSD::send_pg_stats(const utime_t &now)
   osd_stat_t cur_stat = service.get_osd_stat();
 
   cur_stat.os_perf_stat = store->get_cur_stats();
+
+  dout(10) << "send_pg_stats: " << cur_stat.os_perf_stat.deferred_queue_size << dendl;
 
   pg_stat_queue_lock.Lock();
 

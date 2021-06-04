@@ -3774,6 +3774,7 @@ BlueStore::BlueStore(CephContext *cct, const string& path)
     throttle_deferred_bytes(cct, "bluestore_throttle_deferred_bytes",
 		       cct->_conf->bluestore_throttle_bytes +
 		       cct->_conf->bluestore_throttle_deferred_bytes),
+    enable_wal_db_perf_optimize(cct->_conf->bluestore_wal_db_perf_optimize),
     deferred_finisher(cct, "defered_finisher", "dfin"),
     kv_sync_thread(this),
     kv_finalize_thread(this),
@@ -3793,6 +3794,7 @@ BlueStore::BlueStore(CephContext *cct,
     throttle_deferred_bytes(cct, "bluestore_throttle_deferred_bytes",
 		       cct->_conf->bluestore_throttle_bytes +
 		       cct->_conf->bluestore_throttle_deferred_bytes),
+    enable_wal_db_perf_optimize(cct->_conf->bluestore_wal_db_perf_optimize),
     deferred_finisher(cct, "defered_finisher", "dfin"),
     kv_sync_thread(this),
     kv_finalize_thread(this),
@@ -4163,6 +4165,9 @@ void BlueStore::_init_logger()
   b.add_time_avg(l_bluestore_read_lat, "read_lat",
 		 "Average read latency",
 		 "r_l", PerfCountersBuilder::PRIO_CRITICAL);
+  b.add_time_avg(l_bluestore_finalize_thread_lat, "finalize_thread_lat",
+		 "finalize thread latency",
+		 "ft_l", PerfCountersBuilder::PRIO_CRITICAL);
   b.add_time_avg(l_bluestore_read_onode_meta_lat, "read_onode_meta_lat",
     "Average read onode metadata latency");
   b.add_time_avg(l_bluestore_read_wait_aio_lat, "read_wait_aio_lat",
@@ -4259,6 +4264,8 @@ void BlueStore::_init_logger()
                     "Read operations that required at least one retry due to failed checksum validation");
   b.add_u64(l_bluestore_fragmentation, "bluestore_fragmentation_micros",
             "How fragmented bluestore free space is (free extents / max possible number of free extents) * 1000");
+  b.add_u64(l_bluestore_deferred_queue_sizes, "bluestore_deferred_queue_sizes",
+	    "num of deferred queue sizes");
   logger = b.create_perf_counters();
   cct->get_perfcounters_collection()->add(logger);
 }
@@ -8790,9 +8797,14 @@ void BlueStore::_txc_finish(TransContext *txc)
   }
 
   if (submit_deferred) {
-    // we're pinning memory; flush!  we could be more fine-grained here but
-    // i'm not sure it's worth the bother.
-    deferred_try_submit();
+    if (!enable_wal_db_perf_optimize) {
+      // we're pinning memory; flush!  we could be more fine-grained here but
+      // i'm not sure it's worth the bother.
+      deferred_try_submit();
+    } else {
+      std::unique_lock<std::mutex> m(kv_finalize_lock);
+      kv_finalize_cond.notify_one();
+    }
   }
 
   if (empty && osr->zombie) {
@@ -8999,8 +9011,13 @@ void BlueStore::_kv_sync_thread()
 	       << dendl;
       kv_committing.swap(kv_queue);
       kv_submitting.swap(kv_queue_unsubmitted);
-      deferred_done.swap(deferred_done_queue);
-      deferred_stable.swap(deferred_stable_queue);
+      if (enable_wal_db_perf_optimize) {
+        //deferred_done.swap(deferred_done_queue);
+        deferred_stable.swap(deferred_done_queue);
+      } else {
+        deferred_done.swap(deferred_done_queue);
+        deferred_stable.swap(deferred_stable_queue);
+      }
       aios = kv_ios;
       costs = kv_throttle_costs;
       kv_ios = 0;
@@ -9027,21 +9044,37 @@ void BlueStore::_kv_sync_thread()
 	} else if (deferred_aggressive) {
 	  force_flush = true;
 	}
-      } else
-	force_flush = true;
-
+      } else {
+        if (enable_wal_db_perf_optimize) {
+	  if (aios) {  //if defer write, then move flush to deferred_aio_finish.
+            force_flush = true;
+            dout(20) << __func__ << " force flush." << dendl;
+	  } else {
+	    dout(20) << __func__ << " skipping flush (no aios)" << dendl;
+	  }
+	} else {
+	  if (aios || !deferred_done.empty()) {
+            force_flush = true;
+            dout(20) << __func__ << " force flush." << dendl;
+	  } else {
+	    dout(20) << __func__ << " skipping flush (no aios)" << dendl;
+	  }
+	}
+      }
       if (force_flush) {
 	dout(20) << __func__ << " num_aios=" << aios
 		 << " force_flush=" << (int)force_flush
 		 << ", flushing, deferred done->stable" << dendl;
 	// flush/barrier on block device
 	bdev->flush();
-
-	// if we flush then deferred done are now deferred stable
-	deferred_stable.insert(deferred_stable.end(), deferred_done.begin(),
+        if (!enable_wal_db_perf_optimize) {
+	  // if we flush then deferred done are now deferred stable
+	  deferred_stable.insert(deferred_stable.end(), deferred_done.begin(),
 			       deferred_done.end());
-	deferred_done.clear();
+	  deferred_done.clear();
+	}
       }
+
       utime_t after_flush = ceph_clock_now();
 
       // we will use one final transaction to force a sync
@@ -9180,6 +9213,8 @@ void BlueStore::_kv_sync_thread()
 	bluefs_extents_reclaiming.clear();
       }
 
+      deque<TransContext*> kv_committed;
+      deque<DeferredBatch*> deferred_stable_finalize;
       {
 	std::unique_lock<std::mutex> m(kv_finalize_lock);
 	if (kv_committing_to_finalize.empty()) {
@@ -9200,7 +9235,35 @@ void BlueStore::_kv_sync_thread()
 	    deferred_stable.end());
           deferred_stable.clear();
 	}
+
+        if (enable_wal_db_perf_optimize) {
+          kv_committed.swap(kv_committing_to_finalize);
+          deferred_stable_finalize.swap(deferred_stable_to_finalize);
+        }
 	kv_finalize_cond.notify_one();
+      }
+
+      if (enable_wal_db_perf_optimize) {
+        while (!kv_committed.empty()) {
+          dout(30) << __func__ << " commit." << dendl;
+	  TransContext *txc = kv_committed.front();
+	  assert(txc->state == TransContext::STATE_KV_SUBMITTED);
+	  _txc_state_proc(txc);
+	  kv_committed.pop_front();
+        }
+        // free memory
+        for (auto b : deferred_stable_finalize) {
+          dout(30) << __func__ << " free." << dendl;
+	  auto p = b->txcs.begin();
+	  while (p != b->txcs.end()) {
+	    TransContext *txc = &*p;
+	    p = b->txcs.erase(p); // unlink here because
+	    _txc_state_proc(txc); // this may destroy txc
+	  }
+	  delete b;
+        }
+        deferred_stable_finalize.clear();
+        _reap_collections();
       }
 
       l.lock();
@@ -9225,48 +9288,70 @@ void BlueStore::_kv_finalize_thread()
   while (true) {
     assert(kv_committed.empty());
     assert(deferred_stable.empty());
-    if (kv_committing_to_finalize.empty() &&
-	deferred_stable_to_finalize.empty()) {
+    if (!enable_wal_db_perf_optimize) {
+      dout(20) << __func__ << "there is not wal and db perf optimize. "  << dendl;
+      if (kv_committing_to_finalize.empty() &&
+	    deferred_stable_to_finalize.empty()) {
+        if (kv_finalize_stop)
+	  break;
+        dout(20) << __func__ << " sleep" << dendl;
+        kv_finalize_cond.wait(l);
+        dout(20) << __func__ << " wake" << dendl;
+      } else {
+        kv_committed.swap(kv_committing_to_finalize);
+        deferred_stable.swap(deferred_stable_to_finalize);
+        l.unlock();
+        dout(20) << __func__ << " kv_committed " << kv_committed << dendl;
+        dout(20) << __func__ << " deferred_stable " << deferred_stable << dendl;
+
+        while (!kv_committed.empty()) {
+	  TransContext *txc = kv_committed.front();
+	  assert(txc->state == TransContext::STATE_KV_SUBMITTED);
+	  _txc_state_proc(txc);
+	  kv_committed.pop_front();
+        }
+
+        for (auto b : deferred_stable) {
+	  auto p = b->txcs.begin();
+	  while (p != b->txcs.end()) {
+	    TransContext *txc = &*p;
+	    p = b->txcs.erase(p); // unlink here because
+	    _txc_state_proc(txc); // this may destroy txc
+	  }
+	  delete b;
+        }
+        deferred_stable.clear();
+
+        if (!deferred_aggressive) {
+	  if (deferred_queue_size >= deferred_batch_ops.load() ||
+	     throttle_deferred_bytes.past_midpoint()) {
+	    deferred_try_submit();
+	  }
+        }
+
+        // this is as good a place as any ...
+        _reap_collections();
+
+        l.lock();
+      }
+    } else {
+      dout(20) << __func__ << "there is wal and db perf optimize. "  << dendl;
       if (kv_finalize_stop)
 	break;
-      dout(20) << __func__ << " sleep" << dendl;
+      dout(20) << __func__ << " sleep. " << dendl;
       kv_finalize_cond.wait(l);
-      dout(20) << __func__ << " wake" << dendl;
-    } else {
-      kv_committed.swap(kv_committing_to_finalize);
-      deferred_stable.swap(deferred_stable_to_finalize);
+      dout(20) << __func__ << " wake. " << dendl;
       l.unlock();
-      dout(20) << __func__ << " kv_committed " << kv_committed << dendl;
-      dout(20) << __func__ << " deferred_stable " << deferred_stable << dendl;
-
-      while (!kv_committed.empty()) {
-	TransContext *txc = kv_committed.front();
-	assert(txc->state == TransContext::STATE_KV_SUBMITTED);
-	_txc_state_proc(txc);
-	kv_committed.pop_front();
-      }
-
-      for (auto b : deferred_stable) {
-	auto p = b->txcs.begin();
-	while (p != b->txcs.end()) {
-	  TransContext *txc = &*p;
-	  p = b->txcs.erase(p); // unlink here because
-	  _txc_state_proc(txc); // this may destroy txc
-	}
-	delete b;
-      }
-      deferred_stable.clear();
-
-      if (!deferred_aggressive) {
+      utime_t start = ceph_clock_now();
+      if (!deferred_aggressive && mounted) {
 	if (deferred_queue_size >= deferred_batch_ops.load() ||
 	    throttle_deferred_bytes.past_midpoint()) {
+          dout(20) << __func__ << " deferred_try_submit start. "  << deferred_queue_size << dendl;
 	  deferred_try_submit();
+          dout(20) << __func__ << " deferred_try_submit end. "  << deferred_queue_size << dendl;
+          logger->tinc(l_bluestore_finalize_thread_lat, ceph_clock_now() - start);
 	}
       }
-
-      // this is as good a place as any ...
-      _reap_collections();
-
       l.lock();
     }
   }
@@ -9296,6 +9381,7 @@ void BlueStore::_deferred_queue(TransContext *txc)
     txc->osr->deferred_pending = new DeferredBatch(cct, txc->osr.get());
   }
   ++deferred_queue_size;
+  logger->set(l_bluestore_deferred_queue_sizes, deferred_queue_size);
   txc->osr->deferred_pending->txcs.push_back(*txc);
   bluestore_deferred_transaction_t& wt = *txc->deferred_txn;
   for (auto opi = wt.ops.begin(); opi != wt.ops.end(); ++opi) {
@@ -9351,6 +9437,7 @@ void BlueStore::_deferred_submit_unlock(OpSequencer *osr)
   auto b = osr->deferred_pending;
   deferred_queue_size -= b->seq_bytes.size();
   assert(deferred_queue_size >= 0);
+  logger->set(l_bluestore_deferred_queue_sizes, deferred_queue_size);
 
   osr->deferred_running = osr->deferred_pending;
   osr->deferred_pending = nullptr;
@@ -9390,6 +9477,10 @@ void BlueStore::_deferred_submit_unlock(OpSequencer *osr)
   }
 
   deferred_lock.unlock();
+  // when deferred_repaly(when mounted is false), then no sleep between different aios submit.
+  // and call the  callback just all aio complete
+  if (mounted)
+    b->ioc.defer_write = true;
   bdev->aio_submit(&b->ioc);
 }
 
@@ -9406,6 +9497,27 @@ void BlueStore::_deferred_aio_finish(OpSequencer *osr)
   dout(10) << __func__ << " osr " << osr << dendl;
   assert(osr->deferred_running);
   DeferredBatch *b = osr->deferred_running;
+
+  if (enable_wal_db_perf_optimize && b->ioc.num_running != 0) {
+    if (b->batch_costs == 0) {
+      uint64_t costs = 0;
+      std::lock_guard<std::mutex> l2(osr->qlock);
+      for (auto& i : b->txcs) {
+        TransContext *txc = &i;
+        txc->state = TransContext::STATE_DEFERRED_CLEANUP;
+        costs += txc->cost;
+      }
+      b->batch_costs = costs;
+      b->batch_costs_remaining = costs;
+    }
+    uint64_t release_throttle = b->batch_costs/b->ioc.num_initial_running;
+    b->batch_costs_remaining -= release_throttle;
+    std::lock_guard<std::mutex> l2(osr->qlock);
+    dout(3) << __func__ << " release throttle:" << release_throttle << ", " << b->batch_costs << "," << b->ioc.num_initial_running  << dendl;
+    throttle_deferred_bytes.put(release_throttle);
+    return;
+  }
+  dout(3) << __func__ << " release throttle-02:" << b->batch_costs_remaining << dendl;
 
   {
     std::lock_guard<std::mutex> l(deferred_lock);
@@ -9432,11 +9544,29 @@ void BlueStore::_deferred_aio_finish(OpSequencer *osr)
       costs += txc->cost;
     }
     osr->qcond.notify_all();
-    throttle_deferred_bytes.put(costs);
+    if (!enable_wal_db_perf_optimize) {
+      throttle_deferred_bytes.put(costs);
+    } else {
+      throttle_deferred_bytes.put(b->batch_costs_remaining);
+    }
     std::lock_guard<std::mutex> l(kv_lock);
     deferred_done_queue.emplace_back(b);
   }
 
+  // init ...
+  {
+    b->ioc.num_initial_running = 0;
+    b->batch_costs = 0;
+    b->batch_costs_remaining = 0;
+  }
+
+  if (enable_wal_db_perf_optimize) {
+    // move flush in kv_sync_thread to here.
+    utime_t start = ceph_clock_now();
+    bdev->flush();
+    utime_t dur_flush = ceph_clock_now() - start;
+    logger->tinc(l_bluestore_kv_flush_lat, dur_flush);
+  }
   // in the normal case, do not bother waking up the kv thread; it will
   // catch us on the next commit anyway.
   if (deferred_aggressive) {
@@ -9473,6 +9603,7 @@ int BlueStore::_deferred_replay()
     txc->state = TransContext::STATE_KV_DONE;
     _txc_state_proc(txc);
   }
+  dout(10) << __func__ << " replay counts: " << count << dendl;
  out:
   dout(20) << __func__ << " draining osr" << dendl;
   _osr_drain_all();
@@ -9552,19 +9683,29 @@ int BlueStore::queue_transactions(
   throttle_bytes.get(txc->cost);
   if (txc->deferred_txn) {
     // ensure we do not block here because of deferred writes
-    if (!throttle_deferred_bytes.get_or_fail(txc->cost)) {
+    bool throttle = throttle_deferred_bytes.get_or_fail(txc->cost);
+    if  (!throttle) {
       dout(10) << __func__ << " failed get throttle_deferred_bytes, aggressive"
 	       << dendl;
-      ++deferred_aggressive;
-      deferred_try_submit();
+      if (!enable_wal_db_perf_optimize) {
+        ++deferred_aggressive;
+        deferred_try_submit();
+      }
       {
-	// wake up any previously finished deferred events
+        // wake up any previously finished deferred events
 	std::lock_guard<std::mutex> l(kv_lock);
 	kv_cond.notify_one();
       }
+      if (enable_wal_db_perf_optimize)  {
+           std::unique_lock<std::mutex> m(kv_finalize_lock);
+           kv_finalize_cond.notify_one();
+      }
       throttle_deferred_bytes.get(txc->cost);
-      --deferred_aggressive;
-   }
+      if (!enable_wal_db_perf_optimize) {
+        --deferred_aggressive;
+      }
+      dout(10) << __func__ << "success to get throttle " << txc << dendl;
+    }
   }
   utime_t tend = ceph_clock_now();
 

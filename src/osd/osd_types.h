@@ -875,22 +875,26 @@ struct objectstore_perf_stat_t {
   // cur_op_latency is in ms since double add/sub are not associative
   uint32_t os_commit_latency;
   uint32_t os_apply_latency;
+  int deferred_queue_size;
 
   objectstore_perf_stat_t() :
-    os_commit_latency(0), os_apply_latency(0) {}
+    os_commit_latency(0), os_apply_latency(0), deferred_queue_size(0) {}
 
   bool operator==(const objectstore_perf_stat_t &r) const {
     return os_commit_latency == r.os_commit_latency &&
-      os_apply_latency == r.os_apply_latency;
+      os_apply_latency == r.os_apply_latency &&
+      deferred_queue_size == r.deferred_queue_size;
   }
 
   void add(const objectstore_perf_stat_t &o) {
     os_commit_latency += o.os_commit_latency;
     os_apply_latency += o.os_apply_latency;
+    deferred_queue_size += o.deferred_queue_size;
   }
   void sub(const objectstore_perf_stat_t &o) {
     os_commit_latency -= o.os_commit_latency;
     os_apply_latency -= o.os_apply_latency;
+    deferred_queue_size -= o.deferred_queue_size;
   }
   void dump(Formatter *f) const;
   void encode(bufferlist &bl) const;

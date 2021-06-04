@@ -47,6 +47,8 @@ public:
   std::list<aio_t> running_aios;    ///< submitting or submitted
   std::atomic_int num_pending = {0};
   std::atomic_int num_running = {0};
+  std::atomic_int num_initial_running = {0}; // for release throttle
+  bool defer_write = false; // defer write. (others include no defer write and _deferred_replay)
   bool allow_eio;
 
   explicit IOContext(CephContext* cct, void *p, bool allow_eio = false)

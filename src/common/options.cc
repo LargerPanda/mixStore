@@ -1130,6 +1130,10 @@ std::vector<Option> get_global_options() {
     .set_default(false)
     .set_description(""),
 
+    Option("mon_allow_pgchange", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description(""),
+
     Option("mon_fake_pool_delete", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
     .set_description(""),
@@ -3306,6 +3310,15 @@ std::vector<Option> get_global_options() {
     .set_default(16)
     .set_description(""),
 
+    Option("bdev_aio_once_submit_max", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(100)
+    .set_description(""),
+
+    Option("bdev_aio_submit_sleep", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.2)
+    .set_min_max(0, 1)
+    .set_description("Time in seconds to sleep after last submit"),
+
     Option("bdev_block_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(4_K)
     .set_description(""),
@@ -3421,6 +3434,10 @@ std::vector<Option> get_global_options() {
     .set_default(0)
     .set_description("How frequently (in seconds) to dump information on "
       "allocation failure occurred during BlueFS space rebalance"),
+
+    Option("bluestore_wal_db_perf_optimize", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_default(false)
+    .set_description("enable the perf optimize that use ssd for wal and db"),
 
     Option("bluestore_spdk_mem", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(512)

@@ -6579,7 +6579,8 @@ int OSDMonitor::prepare_command_pool_set(map<string,cmd_vartype> &cmdmap,
     }
     p.crash_replay_interval = n;
   } else if (var == "pg_num") {
-    if (p.has_flag(pg_pool_t::FLAG_NOPGCHANGE)) {
+    //if (p.has_flag(pg_pool_t::FLAG_NOPGCHANGE) && !g_conf->mon_allow_pgchange) {
+    if (!g_conf->mon_allow_pgchange) {
       ss << "pool pg_num change is disabled; you must unset nopgchange flag for the pool first";
       return -EPERM;
     }
@@ -6624,7 +6625,8 @@ int OSDMonitor::prepare_command_pool_set(map<string,cmd_vartype> &cmdmap,
     // don't understand that split PGs now form a new interval.
     p.last_force_op_resend_preluminous = pending_inc.epoch;
   } else if (var == "pgp_num") {
-    if (p.has_flag(pg_pool_t::FLAG_NOPGCHANGE)) {
+    //if (p.has_flag(pg_pool_t::FLAG_NOPGCHANGE) && !g_conf->mon_allow_pgchange) {
+    if (!g_conf->mon_allow_pgchange) {
       ss << "pool pgp_num change is disabled; you must unset nopgchange flag for the pool first";
       return -EPERM;
     }
