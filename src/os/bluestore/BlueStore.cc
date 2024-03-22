@@ -4072,7 +4072,7 @@ int BlueStore::_set_cache_sizes()
          << dendl;
     return -EINVAL;
   }
-
+//hahahahah
   cache_data_ratio =
     (double)1.0 - (double)cache_meta_ratio - (double)cache_kv_ratio;
   if (cache_data_ratio < 0) {
