@@ -586,6 +586,8 @@ int RocksDBStore::submit_transaction_sync(KeyValueDB::Transaction t)
   lgeneric_subdout(cct, rocksdb, 30) << __func__;
   RocksWBHandler bat_txc;
   _t->bat.Iterate(&bat_txc);
+
+  if (bat_txc.seen.empty()) { return 0;}
   *_dout << " Rocksdb transaction: " << bat_txc.seen << dendl;
 
   rocksdb::Status s = db->Write(woptions, &_t->bat);

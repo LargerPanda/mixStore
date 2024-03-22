@@ -10550,7 +10550,7 @@ void BlueStore::_do_write_big(
 
     bufferlist t;
     blp.copy(l, t);
-    wctx->write(offset, b, l, b_off, t, b_off, l, false, new_blob);
+    wctx->write_big(offset, b, l, b_off, t, b_off, l, false, new_blob);
     offset += l;
     length -= l;
     logger->inc(l_bluestore_write_big_blobs);
@@ -10816,7 +10816,8 @@ int BlueStore::_do_alloc_write(
 
     // queue io
     if (!g_conf->bluestore_debug_omit_block_device_write) {
-      if (l->length() <= prefer_deferred_size.load()) {
+      if (l->length() <= prefer_deferred_size.load()||wi.big_write==true) {
+      //if (l->length() <= prefer_deferred_size.load()) {
 	dout(20) << __func__ << " deferring small 0x" << std::hex
 		 << l->length() << std::dec << " write via deferred" << dendl;
 	bluestore_deferred_op_t *op = _get_deferred_op(txc, o);
