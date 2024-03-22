@@ -3436,7 +3436,7 @@ std::vector<Option> get_global_options() {
       "allocation failure occurred during BlueFS space rebalance"),
 
     Option("bluestore_wal_db_perf_optimize", Option::TYPE_BOOL, Option::LEVEL_DEV)
-    .set_default(false)
+    .set_default(true)
     .set_description("enable the perf optimize that use ssd for wal and db"),
 
     Option("bluestore_spdk_mem", Option::TYPE_UINT, Option::LEVEL_DEV)
@@ -3790,12 +3790,12 @@ std::vector<Option> get_global_options() {
     .set_description("Maximum bytes read at once by deep fsck"),
 
     Option("bluestore_throttle_bytes", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(64_M)
+    .set_default(100_G)
     .set_safe()
     .set_description("Maximum bytes in flight before we throttle IO submission"),
 
     Option("bluestore_throttle_deferred_bytes", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(128_M)
+    .set_default(100_G)
     .set_safe()
     .set_description("Maximum bytes for deferred writes before we throttle IO submission"),
 
