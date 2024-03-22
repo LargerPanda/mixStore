@@ -9025,6 +9025,10 @@ void BlueStore::_kv_sync_thread()
       utime_t start = ceph_clock_now();
       l.unlock();
 
+      if(kv_committing.size()!=0){
+          dout(0) << " mydebug: committing " << kv_committing.size() << dendl;
+      }
+
       dout(30) << __func__ << " committing " << kv_committing << dendl;
       dout(30) << __func__ << " submitting " << kv_submitting << dendl;
       dout(30) << __func__ << " deferred_done " << deferred_done << dendl;
