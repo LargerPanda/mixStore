@@ -9026,7 +9026,7 @@ void BlueStore::_kv_sync_thread()
       l.unlock();
 
       if(kv_committing.size()!=0){
-          dout(0) << " mydebug: committing " << kv_committing.size() << dendl;
+          dout(20) << " mydebug: committing " << kv_committing.size() << dendl;
       }
 
       dout(30) << __func__ << " committing " << kv_committing << dendl;
@@ -10922,6 +10922,9 @@ void BlueStore::_do_write_data(
 {
   uint64_t end = offset + length;
   bufferlist::iterator p = bl.begin();
+  dout(20)<<"mydebug: offset="<<offset<<", length="<<length<<dendl;
+  dout(20)<<"mydebug: length of bufferlist="<<bl.length()<<dendl;
+  dout(20)<<"mydebug: last thing of bufferlist="<<(char)(bl[length-1])<<dendl;
 
   if (offset / min_alloc_size == (end - 1) / min_alloc_size &&
       (length != min_alloc_size)) {
