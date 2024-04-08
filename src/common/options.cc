@@ -3436,7 +3436,7 @@ std::vector<Option> get_global_options() {
       "allocation failure occurred during BlueFS space rebalance"),
 
     Option("bluestore_wal_db_perf_optimize", Option::TYPE_BOOL, Option::LEVEL_DEV)
-    .set_default(true)
+    .set_default(false)
     .set_description("enable the perf optimize that use ssd for wal and db"),
 
     Option("bluestore_spdk_mem", Option::TYPE_UINT, Option::LEVEL_DEV)
